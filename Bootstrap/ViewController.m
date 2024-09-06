@@ -1,7 +1,7 @@
 #include "common.h"
 #include "credits.h"
 #include "bootstrap.h"
-#include "AppList.h"
+#include "AppInfo.h"
 #include "AppDelegate.h"
 #import "ViewController.h"
 #include "AppViewController.h"
@@ -136,7 +136,7 @@ void initFromSwiftUI()
         }
 
         [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:nil usingBlock:^(NSNotification * _Nonnull note) {
-            checkServer();
+            if(isSystemBootstrapped()) checkServer();
         }];
     }
 
@@ -144,12 +144,18 @@ void initFromSwiftUI()
         if([UIApplication.sharedApplication canOpenURL:[NSURL URLWithString:@"filza://"]]
            || [LSPlugInKitProxy pluginKitProxyForIdentifier:@"com.tigisoftware.Filza.Sharing"])
         {
-            [AppDelegate showMesage:Localized(@"It seems that you have the Filza app installed, which may be detected as jailbroken. You can enable Tweak for it to hide it.") title:Localized(@"Warning")];
+            [AppDelegate showMesage:Localized(@"It seems that you have the Filza installed in trollstore, which may be detected as jailbroken. You can remove it from trollstore then install Filza from roothide repo in Sileo.") title:Localized(@"Warning")];
         }
     }
 }
 
 @end
+
+void setIdleTimerDisabled(BOOL disabled) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[UIApplication sharedApplication] setIdleTimerDisabled:disabled];
+    });
+}
 
 BOOL checkTSVersion()
 {    
@@ -184,6 +190,7 @@ void rebuildappsAction()
 
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
         [AppDelegate showHudMsg:Localized(@"Applying")];
+        setIdleTimerDisabled(YES);
 
         NSString* log=nil;
         NSString* err=nil;
@@ -194,6 +201,7 @@ void rebuildappsAction()
             [AppDelegate showMesage:[NSString stringWithFormat:@"%@\n\nstderr:\n%@",log,err] title:[NSString stringWithFormat:@"code(%d)",status]];
         }
         [AppDelegate dismissHud];
+        setIdleTimerDisabled(NO);
     });
 }
 
@@ -240,7 +248,7 @@ void reinstallPackageManager()
 
 int rebuildIconCache()
 {
-    AppList* tsapp = [AppList appWithBundleIdentifier:@"com.opa334.TrollStore"];
+    AppInfo* tsapp = [AppInfo appWithBundleIdentifier:@"com.opa334.TrollStore"];
     if(!tsapp) {
         STRAPLOG("trollstore not found!");
         return -1;
@@ -279,6 +287,7 @@ void rebuildIconCacheAction()
     [AppDelegate addLogText:Localized(@"Status: Rebuilding Icon Cache")];
 
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
+        setIdleTimerDisabled(YES);
         [AppDelegate showHudMsg:Localized(@"Rebuilding") detail:Localized(@"Don't exit Bootstrap app until show the lock screen")];
 
         NSString* log=nil;
@@ -289,6 +298,7 @@ void rebuildIconCacheAction()
         }
 
         [AppDelegate dismissHud];
+        setIdleTimerDisabled(NO);
     });
 }
 
@@ -303,6 +313,36 @@ void tweaEnableAction(BOOL enable)
     } else if([NSFileManager.defaultManager fileExistsAtPath:jbroot(@"/var/mobile/.tweakenabled")]) {
         ASSERT([NSFileManager.defaultManager removeItemAtPath:jbroot(@"/var/mobile/.tweakenabled") error:nil]);
     }
+}
+
+void URLSchemesToggle(BOOL enable)
+{
+    if(enable) {
+        ASSERT([[NSString new] writeToFile:jbroot(@"/var/mobile/.allow_url_schemes") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+    } else if([NSFileManager.defaultManager fileExistsAtPath:jbroot(@"/var/mobile/.allow_url_schemes")]) {
+        ASSERT([NSFileManager.defaultManager removeItemAtPath:jbroot(@"/var/mobile/.allow_url_schemes") error:nil]);
+    }
+    
+    rebuildappsAction();
+}
+
+void URLSchemesAction(BOOL enable)
+{
+    if(!isSystemBootstrapped()) return;
+    
+    if(!enable) {
+        URLSchemesToggle(enable);
+        return;
+    }
+    
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:Localized(@"Warning") message:Localized(@"Enabling URL Schemes may result in jailbreak detection. Are you sure you want to continue?") preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:Localized(@"NO") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){
+        [NSNotificationCenter.defaultCenter postNotificationName:@"URLSchemesCancelNotification" object:nil];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:Localized(@"YES") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        URLSchemesToggle(enable);
+    }]];
+    [AppDelegate showAlert:alert];
 }
 
 BOOL opensshAction(BOOL enable)
@@ -394,6 +434,7 @@ void bootstrapAction()
     [AppDelegate showHudMsg:Localized(@"Bootstrapping")];
 
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
+        setIdleTimerDisabled(YES);
 
         const char* argv[] = {NSBundle.mainBundle.executablePath.fileSystemRepresentation, "bootstrap", NULL};
         int status = spawn(argv[0], argv, environ, ^(char* outstr, int length){
@@ -405,6 +446,7 @@ void bootstrapAction()
         });
 
         [AppDelegate dismissHud];
+        setIdleTimerDisabled(NO);
 
         if(status != 0)
         {
@@ -448,12 +490,14 @@ void unbootstrapAction()
 
         dispatch_async(dispatch_get_global_queue(0, 0), ^{
             [AppDelegate showHudMsg:Localized(@"Uninstalling")];
+            setIdleTimerDisabled(YES);
 
             NSString* log=nil;
             NSString* err=nil;
             int status = spawnRoot(NSBundle.mainBundle.executablePath, @[@"unbootstrap"], &log, &err);
 
             [AppDelegate dismissHud];
+            setIdleTimerDisabled(NO);
 
             NSString* msg = (status==0) ? Localized(@"bootstrap uninstalled") : [NSString stringWithFormat:@"code(%d)\n%@\n\nstderr:\n%@",status,log,err];
 
